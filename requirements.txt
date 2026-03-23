@@ -1,0 +1,7 @@
+streamlit
+mediapipe
+numpy
+SpeechRecognition
+opencv-python-headless
+plotly
+pandas
