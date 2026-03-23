@@ -69,4 +69,3 @@ with col2:
         fig = px.line(df, x="Session", y="Score", title="Your Growth Curve")
         st.plotly_chart(fig)
 
----
