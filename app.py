@@ -1,10 +1,13 @@
 import streamlit as st
 import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 import cv2
 import time
 import numpy as np
 import pandas as pd
 import plotly.express as px
+
 
 # --- INITIALIZATION ---
 mp_pose = mp.solutions.pose
@@ -38,6 +41,25 @@ def analyze_frame(frame):
         
     return int(confidence_score)
 
+# --- NEW TASK-BASED INITIALIZATION ---
+# 1. Download the model file (pose_landmarker.task) and put it in your repo
+# Or use this code to set up the detector
+def create_detector():
+    base_options = python.BaseOptions(model_asset_path='pose_landmarker.task')
+    options = vision.PoseLandmarkerOptions(
+        base_options=base_options,
+        output_segmentation_masks=True
+    )
+    return vision.PoseLandmarker.create_from_options(options)
+
+# Use a try-except block to handle the attribute error gracefully
+try:
+    mp_pose = mp.solutions.pose
+    pose = mp_pose.Pose(min_detection_confidence=0.5)
+except AttributeError:
+    st.error("MediaPipe version mismatch. Please use 'pip install mediapipe==0.10.14' or migrate to Tasks API.")
+
+
 # --- MAIN INTERFACE ---
 col1, col2 = st.columns([2, 1])
 
@@ -68,4 +90,4 @@ with col2:
         df = pd.DataFrame(st.session_state.history)
         fig = px.line(df, x="Session", y="Score", title="Your Growth Curve")
         st.plotly_chart(fig)
-
+        
