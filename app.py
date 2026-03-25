@@ -204,7 +204,7 @@ with col1:
         elif rel_score < 20:
             st.warning("You might be rambling. Try to use keywords from the question.")
         else:
-            st.success("Sharp and Concise! Point awarded.") up straighter to project more confidence.")
+            st.success("Sharp and Concise! Point awarded.")
 
 with col2:
     st.subheader("Gamified Progress")
