@@ -1,7 +1,6 @@
 streamlit
 mediapipe==0.10.14
-numpy
-SpeechRecognition
 opencv-python-headless
-plotly
+numpy
 pandas
+plotly
