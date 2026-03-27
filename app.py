@@ -1,174 +1,127 @@
 import streamlit as st
-import cv2
 import time
-import numpy as np
+import random
 import pandas as pd
 import plotly.express as px
-import random
+from streamlit.components.v1 import html
 
-# --- 1. ROBUST VISION ENGINE INITIALIZATION ---
-# We wrap this in a try-except at the very top to prevent the app from crashing on boot.
-try:
-    import mediapipe as mp
-    mp_pose = mp.solutions.pose
-    # Initialize the pose detector once and cache it
-    pose_detector = mp_pose.Pose(
-        static_image_mode=False, 
-        model_complexity=1, 
-        min_detection_confidence=0.5
-    )
-    VISION_ENGINE_LIVE = True
-except Exception as e:
-    VISION_ENGINE_LIVE = False
-    VISION_ERROR = str(e)
+# --- 1. CONFIG & SESSION STATE ---
+st.set_page_config(page_title="Psyc-Check Pro", layout="wide")
 
-# --- 2. CONFIG & DATA ---
-st.set_page_config(page_title="Psyc-Check: AI Speaking Coach", layout="wide")
-
-QUESTIONS = [
-    "Tell me about a time you handled a difficult conflict at work.",
-    "What is your greatest professional achievement so far?",
-    "How do you handle high-pressure situations and tight deadlines?",
-    "Why should we hire you over other candidates with similar skills?",
-    "Describe a complex project you led and the results you achieved.",
-    "Tell me about a time you had to align multiple stakeholders.",
-    "Describe a situation where you had to push back on a senior leader.",
-    "Tell me about a time you failed. What did you learn?",
-    "How do you handle a situation where stakeholders keep changing requirements?",
-    "Tell me about a time you had to align multiple stakeholders with conflicting priorities.",
-    "Tell me about a time you changed someone’s mind using data.",
-    "Tell me about a time you went beyond your defined role to solve a problem.",
-    "Describe a situation where there was no clear owner, and you stepped in.",
-    "Tell me about a time you identified an opportunity others missed.",
-    "Tell me about a time you had to deliver a project under tight deadlines.",
-    "Describe a time when things didn’t go according to plan. What did you do?",
-    "Tell me about a time you had to manage multiple priorities simultaneously.",
-    "Describe a decision you made that you would approach differently today.",
-    "Tell me about a time you had a disagreement with a cross-functional partner.",
-    "Describe a situation where you had to deal with a difficult team member.",
-    "Tell me about a time you uncovered a customer need that wasn’t obvious."
+# The precise timing structure you requested
+SPEECH_STRUCTURE = [
+    ("Hook", 30),
+    ("Handshake", 45),
+    ("Problem", 30),
+    ("Sub-Problem", 30),
+    ("Action", 60),
+    ("Sub-Result", 30),
+    ("Result", 30),
+    ("Lessons Learnt", 15)
 ]
+TOTAL_TIME = sum(s[1] for s in SPEECH_STRUCTURE) # 270 seconds (4.5 mins)
 
-# Initialize Session States for Gamification
-if 'history' not in st.session_state: st.session_state.history = []
-if 'current_q' not in st.session_state: st.session_state.current_q = random.choice(QUESTIONS)
 if 'start_time' not in st.session_state: st.session_state.start_time = None
-if 'elapsed' not in st.session_state: st.session_state.elapsed = 0
+if 'history' not in st.session_state: st.session_state.history = []
 
-# --- 3. LOGIC FUNCTIONS ---
+# --- 2. VIDEO RECORDING INJECTION (JavaScript) ---
+# This allows us to record real video in the browser since Streamlit doesn't do it natively.
+st.sidebar.title("Video Controls")
+record_code = """
+<div style="text-align: center;">
+    <video id="video" width="320" height="240" autoplay muted style="border:2px solid #555; border-radius:10px;"></video><br>
+    <button id="start" style="padding:10px; background-color:#28a745; color:white; border:none; border-radius:5px; cursor:pointer;">⏺ Start Recording</button>
+    <button id="stop" style="padding:10px; background-color:#dc3545; color:white; border:none; border-radius:5px; cursor:pointer;">⏹ Stop & Download</button>
+</div>
+<script>
+    let b = document.getElementById("start");
+    let s = document.getElementById("stop");
+    let v = document.getElementById("video");
+    let mediaRecorder;
+    let chunks = [];
 
-def get_new_question():
-    st.session_state.current_q = random.choice(QUESTIONS)
-    st.session_state.start_time = None
-    st.session_state.elapsed = 0
+    async function start() {
+        let stream = await navigator.mediaDevices.getUserMedia({video: true, audio: true});
+        v.srcObject = stream;
+        mediaRecorder = new MediaRecorder(stream);
+        mediaRecorder.ondataavailable = e => chunks.push(e.data);
+        mediaRecorder.onstop = e => {
+            let blob = new Blob(chunks, {type: "video/webm"});
+            let url = URL.createObjectURL(blob);
+            let a = document.createElement("a");
+            a.href = url;
+            a.download = "my_practice_session.webm";
+            a.click();
+        };
+        mediaRecorder.start();
+    }
+    b.onclick = () => { start(); b.disabled = true; };
+    s.onclick = () => { mediaRecorder.stop(); v.srcObject.getTracks().forEach(t => t.stop()); b.disabled = false; };
+</script>
+"""
 
-def calculate_coherence(question, answer):
-    if not answer: return 0
-    stop_words = {'a', 'the', 'is', 'at', 'which', 'on', 'and', 'i', 'me', 'to', 'of', 'in', 'that'}
-    q_keywords = set([w.lower().strip('?.!,') for w in question.split() if w.lower() not in stop_words])
-    a_words = set([w.lower().strip('?.!,') for w in answer.split()])
-    overlap = q_keywords.intersection(a_words)
-    return round((len(overlap) / len(q_keywords)) * 100, 2) if q_keywords else 0
+# --- 3. THE UI LAYOUT ---
+st.title("🎤 Psyc-Check: Master the Framework")
 
-def analyze_posture(frame):
-    """Calculates a confidence score based on shoulder alignment."""
-    if not VISION_ENGINE_LIVE:
-        return 0
-    try:
-        # Convert BGR to RGB for MediaPipe
-        results = pose_detector.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        if results.pose_landmarks:
-            lm = results.pose_landmarks.landmark
-            # Get Y-coordinates of shoulders (0 is top, 1 is bottom)
-            left_y = lm[mp_pose.PoseLandmark.LEFT_SHOULDER].y
-            right_y = lm[mp_pose.PoseLandmark.RIGHT_SHOULDER].y
-            
-            # The closer to 0 the difference, the straighter the posture
-            diff = abs(left_y - right_y)
-            score = max(0, 100 - (diff * 1000)) 
-            return int(score)
-    except:
-        return 0
-    return 0
-
-# --- 4. THE USER INTERFACE ---
-
-st.title("🎤 Psyc-Check: Your AI Speaking Coach")
-
-# Global Error Warning if MediaPipe fails (helps with debugging)
-if not VISION_ENGINE_LIVE:
-    st.warning(f"⚠️ Vision Engine (MediaPipe) is unavailable in this environment. Focus on Tone & Coherence!")
-
-col1, col2 = st.columns([2, 1])
+col1, col2 = st.columns([1, 2])
 
 with col1:
-    # --- Question Area ---
-    st.info(f"**YOUR QUESTION:** {st.session_state.current_q}")
-    if st.button("New Question ↻"):
-        get_new_question()
-        st.rerun()
-
-    # --- Camera Input (Posture Check) ---
-    img_file = st.camera_input("Snapshot: Check your posture & eye contact")
-    current_posture_score = 0
+    st.subheader("🎥 Video Recorder")
+    html(record_code, height=350)
+    st.caption("Note: Video downloads locally to your computer once stopped.")
     
-    if img_file:
-        bytes_data = img_file.getvalue()
-        cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
-        current_posture_score = analyze_posture(cv2_img)
-        
-        st.metric("Posture Confidence", f"{current_posture_score}%")
-        if current_posture_score > 85:
-            st.success("Perfect alignment! You look authoritative.")
-        else:
-            st.warning("Try to level your shoulders and sit up straighter.")
-
-    st.divider()
-    
-    # --- Stopwatch & Scoring ---
-    c1, c2, c3 = st.columns([1, 1, 1])
-    with c1:
-        if st.button("🚀 START ANSWERING"):
-            st.session_state.start_time = time.time()
-            st.toast("Clock is ticking! Stay concise.")
-    with c2:
-        if st.button("🛑 STOP"):
-            if st.session_state.start_time:
-                st.session_state.elapsed = round(time.time() - st.session_state.start_time, 2)
-    with c3:
-        st.subheader(f"⏱️ {st.session_state.elapsed}s")
-
-    user_text = st.text_area("Paste your transcript here to analyze coherence:", placeholder="I handled the conflict by...", height=150)
-    
-    if user_text:
-        rel_score = calculate_coherence(st.session_state.current_q, user_text)
-        st.metric("Relevance Score", f"{rel_score}%")
-        
-        if rel_score > 40:
-            st.success("Direct & To the point!")
-        else:
-            st.error("Rambling alert: Try to use more keywords from the question.")
+    if st.button("🚀 Start Timer Framework"):
+        st.session_state.start_time = time.time()
 
 with col2:
-    st.sidebar.header("Target Metrics")
-    timer_goal = st.sidebar.slider("Time Limit (s)", 30, 180, 60)
+    st.subheader("⏱️ Live Framework Tracker")
     
-    st.subheader("📊 Session History")
-    
-    # Log Session Button
-    if st.button("💾 Save Session Metrics"):
-        # We calculate the final score for the graph
-        final_rel = rel_score if 'rel_score' in locals() else 0
-        st.session_state.history.append({
-            "Session": len(st.session_state.history) + 1,
-            "Posture": current_posture_score,
-            "Coherence": final_rel
-        })
-        st.success("Session Logged!")
-
-    if st.session_state.history:
-        df = pd.DataFrame(st.session_state.history)
-        fig = px.line(df, x="Session", y=["Posture", "Coherence"], markers=True)
-        st.plotly_chart(fig, use_container_width=True)
+    if st.session_state.start_time:
+        elapsed = time.time() - st.session_state.start_time
+        current_cumulative = 0
+        
+        # Display Progress Bars for each segment
+        for name, duration in SPEECH_STRUCTURE:
+            current_cumulative += duration
+            remaining_for_segment = current_cumulative - elapsed
+            
+            if elapsed < (current_cumulative - duration):
+                # Future segment
+                st.text(f"⚪ {name} ({duration}s)")
+            elif elapsed <= current_cumulative:
+                # Active segment
+                st.subheader(f"🔥 CURRENT: {name.upper()}")
+                st.write(f"Remaining: **{round(remaining_for_segment, 1)}s**")
+                progress = (elapsed - (current_cumulative - duration)) / duration
+                st.progress(min(progress, 1.0))
+            else:
+                # Past segment
+                st.text(f"✅ {name} (Completed)")
+        
+        if elapsed > TOTAL_TIME:
+            st.success("🎉 Session Complete!")
+            if st.button("Reset Timer"):
+                st.session_state.start_time = None
+                st.rerun()
+        
+        # Auto-refresh the UI every 1 second
+        time.sleep(1)
+        st.rerun()
     else:
-        st.write("No sessions logged yet. Start practicing!")
+        st.warning("Click 'Start Timer Framework' to begin your structured practice.")
+
+# --- 4. COHERENCE ANALYSIS ---
+st.divider()
+st.subheader("📝 Post-Session Analysis")
+user_text = st.text_area("Paste your transcript here to check if you stayed 'To the Point':", height=150)
+
+if user_text:
+    # Basic relevance check against the 'Problem' and 'Action' keywords
+    keywords = ["problem", "solution", "action", "result", "learned"]
+    found = [w for w in keywords if w in user_text.lower()]
+    score = (len(found) / len(keywords)) * 100
+    st.metric("Structure Coverage", f"{score}%")
+    if score < 60:
+        st.error("You missed some key structural phases in your speech.")
+    else:
+        st.success("Great structural integrity!")
