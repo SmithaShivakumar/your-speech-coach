@@ -1,22 +1,11 @@
 import streamlit as st
 import time
-import random
 import pandas as pd
 import plotly.express as px
-import numpy as np
-
-# --- 1. SAFE IMPORTS FOR PRODUCTION ---
-try:
-    import cv2
-    import mediapipe as mp
-    VISION_ENGINE_LIVE = True
-except ImportError:
-    VISION_ENGINE_LIVE = False
-
 from streamlit.components.v1 import html
 
-# --- 2. CONFIG & FRAMEWORK ---
-st.set_page_config(page_title="Psyc-Check Pro", layout="wide")
+# --- 1. CONFIG & FRAMEWORK ---
+st.set_page_config(page_title="Psyc-Check Core", layout="wide")
 
 SPEECH_STRUCTURE = [
     ("Hook", 30), ("Handshake", 45), ("Problem", 30), ("Sub-Problem", 30),
@@ -24,15 +13,17 @@ SPEECH_STRUCTURE = [
 ]
 TOTAL_TIME = sum(s[1] for s in SPEECH_STRUCTURE)
 
-if 'start_time' not in st.session_state: st.session_state.start_time = None
-if 'history' not in st.session_state: st.session_state.history = []
+if 'start_time' not in st.session_state: 
+    st.session_state.start_time = None
+if 'history' not in st.session_state: 
+    st.session_state.history = []
 
-# --- 3. BROWSER-BASED VIDEO RECORDER ---
+# --- 2. BROWSER-BASED VIDEO RECORDER ---
 record_js = """
 <div style="text-align: center; font-family: sans-serif; background: #111; padding: 15px; border-radius: 15px;">
-    <video id="video" width="100%" height="auto" autoplay muted style="border-radius:10px;"></video><br>
-    <button id="start" style="margin:10px; padding:12px 20px; background:#28a745; color:white; border:none; border-radius:5px; cursor:pointer;">⏺ RECORD SESSION</button>
-    <button id="stop" style="margin:10px; padding:12px 20px; background:#dc3545; color:white; border:none; border-radius:5px; cursor:pointer;">⏹ STOP & DOWNLOAD</button>
+    <video id="video" width="100%" height="auto" autoplay muted style="border-radius:10px; border: 2px solid #333;"></video><br>
+    <button id="start" style="margin:10px; padding:12px 20px; background:#28a745; color:white; border:none; border-radius:5px; cursor:pointer; font-weight:bold;">⏺ RECORD SESSION</button>
+    <button id="stop" style="margin:10px; padding:12px 20px; background:#dc3545; color:white; border:none; border-radius:5px; cursor:pointer; font-weight:bold;">⏹ STOP & SAVE</button>
 </div>
 <script>
     let b = document.getElementById("start");
@@ -51,7 +42,7 @@ record_js = """
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = "practice_video.webm";
+            a.download = "speech_practice.webm";
             a.click();
             chunks = [];
         };
@@ -62,31 +53,19 @@ record_js = """
 </script>
 """
 
-# --- 4. MAIN INTERFACE ---
-st.title("🎤 Psyc-Check Speaking Mastery")
+# --- 3. MAIN INTERFACE ---
+st.title("🎤 Psyc-Check: Speaking Mastery")
+st.write("Master your pacing, track your framework, and stay on point.")
 
 col_left, col_right = st.columns([1, 2])
 
 with col_left:
     st.subheader("🎥 Video Practice")
     html(record_js, height=400)
-    
-    # Posture Logic
-    st.divider()
-    img_file = st.camera_input("Snapshot: Quick Posture Check")
-    posture_score = 0
-    if img_file and VISION_ENGINE_LIVE:
-        try:
-            bytes_data = img_file.getvalue()
-            cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
-            # Basic brightness/contrast check for 'Confidence'
-            posture_score = int(np.mean(cv2_img) / 2.55) 
-            st.metric("Lighting/Confidence", f"{posture_score}%")
-        except:
-            pass
+    st.caption("Video saves directly to your device to ensure privacy and zero lag.")
 
 with col_right:
-    st.subheader("⏱️ Framework Timer")
+    st.subheader("⏱️ Live Framework Tracker")
     
     if st.button("🚀 BEGIN FLOW", use_container_width=True):
         st.session_state.start_time = time.time()
@@ -103,7 +82,8 @@ with col_right:
                 rem = round(cum_time - elapsed, 1)
                 st.markdown(f"### 🔥 CURRENT PHASE: **{name.upper()}**")
                 st.markdown(f"## Remaining: `{rem}s`")
-                if rem <= 5: st.warning("WRAP UP SOON!")
+                if rem <= 5: 
+                    st.error("WRAP UP THIS SECTION!")
                 st.progress(min((elapsed - (cum_time - duration)) / duration, 1.0))
             else:
                 st.text(f"✅ {name} (Completed)")
@@ -117,11 +97,31 @@ with col_right:
             time.sleep(0.1)
             st.rerun()
 
-# --- 5. PROGRESS TRACKING ---
+# --- 4. COHERENCE & PROGRESS ---
 st.divider()
-if st.button("Log Stats"):
-    st.session_state.history.append({"Session": len(st.session_state.history) + 1, "Score": posture_score})
+st.subheader("📝 Post-Session Analysis")
+
+user_text = st.text_area("Paste your transcript here to check structure coverage:", height=150)
+score = 0
+
+if user_text:
+    keywords = ["problem", "solution", "action", "result", "learned", "because", "impact"]
+    found = [w for w in keywords if w in user_text.lower()]
+    score = int((len(found) / len(keywords)) * 100)
+    
+    st.metric("Structure Coverage Score", f"{score}%")
+    if score < 50:
+        st.warning("You missed some key structural keywords. Make sure to clearly state the problem and the impact.")
+    else:
+        st.success("Great structural integrity! You hit the major points.")
+
+if st.button("💾 Log This Session"):
+    st.session_state.history.append({
+        "Session": len(st.session_state.history) + 1, 
+        "Coherence Score": score
+    })
+    st.toast("Session Saved!")
 
 if st.session_state.history:
     df = pd.DataFrame(st.session_state.history)
-    st.plotly_chart(px.line(df, x="Session", y="Score", markers=True), use_container_width=True)
+    st.plotly_chart(px.line(df, x="Session", y="Coherence Score", markers=True, title="Your Growth Over Time"), use_container_width=True)
