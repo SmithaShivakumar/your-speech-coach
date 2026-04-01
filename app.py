@@ -3,6 +3,7 @@ import time
 import pandas as pd
 import plotly.express as px
 from streamlit.components.v1 import html
+import random
 
 # --- 1. CONFIG & FRAMEWORK ---
 st.set_page_config(page_title="Psyc-Check Core", layout="wide")
@@ -12,6 +13,33 @@ SPEECH_STRUCTURE = [
     ("Action", 60), ("Sub-Result", 30), ("Result", 30), ("Lessons Learnt", 15)
 ]
 TOTAL_TIME = sum(s[1] for s in SPEECH_STRUCTURE)
+
+# --- QUESTION BANK ---
+QUESTIONS = [
+    "Tell me about a time you handled a difficult conflict at work.",
+    "What is your greatest professional achievement so far?",
+    "How do you handle high-pressure situations and tight deadlines?",
+    "Why should we hire you over other candidates with similar skills?",
+    "Describe a complex project you led and the results you achieved.",
+    "Tell me about a time you had to align multiple stakeholders with conflicting priorities.",
+    "Describe a situation where you had to push back on a senior leader.",
+    "Tell me about a time you changed someone’s mind using data.",
+    "How have you handled a situation where stakeholders kept changing requirements?",
+    "Tell me about a time you went beyond your defined role to solve a problem.",
+    "Describe a situation where there was no clear owner, and you stepped in.",
+    "Tell me about a time you identified an opportunity others missed.",
+    "Tell me about a time you had to deliver a project under tight deadlines.",
+    "Describe a time when things didn’t go according to plan. What did you do?",
+    "Tell me about a time you had to manage multiple priorities simultaneously.",
+    "Tell me about a time you failed. What did you learn?",
+    "Describe a decision you made that you would approach differently today.",
+    "Tell me about a time you had a disagreement with a cross-functional partner.",
+    "Describe a situation where you had to deal with a difficult team member.",
+    "Tell me about a time you uncovered a customer need that wasn’t obvious."
+]
+
+if 'current_question' not in st.session_state:
+    st.session_state.current_question = random.choice(QUESTIONS)
 
 if 'start_time' not in st.session_state: 
     st.session_state.start_time = None
@@ -52,7 +80,22 @@ record_js = """
     s.onclick = () => { mediaRecorder.stop(); v.srcObject.getTracks().forEach(t => t.stop()); b.disabled = false; };
 </script>
 """
+def get_new_question():
+    st.session_state.current_question = random.choice(QUESTIONS)
 
+def check_relevance(question, answer):
+    # Basic production-level check: Keyword Overlap
+    q_set = set(question.lower().split())
+    a_set = set(answer.lower().split())
+    
+    # Common "stop words" to ignore
+    stop_words = {'a', 'the', 'is', 'at', 'which', 'on', 'and', 'i', 'me'}
+    q_keywords = q_set - stop_words
+    
+    overlap = q_keywords.intersection(a_set)
+    relevance_score = (len(overlap) / len(q_keywords)) * 100
+    return round(relevance_score, 2)
+    
 # --- 3. MAIN INTERFACE ---
 st.title("🎤 Psyc-Check: Speaking Mastery")
 st.write("Master your pacing, track your framework, and stay on point.")
@@ -60,6 +103,10 @@ st.write("Master your pacing, track your framework, and stay on point.")
 col_left, col_right = st.columns([1, 2])
 
 with col_left:
+    st.info(f"**YOUR QUESTION:** {st.session_state.current_question}")
+    if st.button("Next Question ↻"):
+        get_new_question()
+        st.rerun()
     st.subheader("🎥 Video Practice")
     html(record_js, height=400)
     st.caption("Video saves directly to your device to ensure privacy and zero lag.")
