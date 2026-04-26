@@ -65,8 +65,8 @@ QUESTION_BANK = {
         "How do you explain a complex quantitative finding to a non-technical stakeholder?",
         "Describe a time you found an insight in data that changed a business decision.",
         "How do you handle a situation where the data is incomplete or unreliable?",
-        "Tell me about the most complex financial model you've built.",
-        "Describe a time you had to present a recommendation a client didn't want to hear.",
+        "Tell me about the most complex financial model you have built.",
+        "Describe a time you had to present a recommendation a client did not want to hear.",
         "How do you validate assumptions in a financial model?",
         "Tell me about a time you worked under extreme time pressure to deliver an analysis.",
         "How do you decide what level of granularity to use in a model?",
@@ -104,11 +104,11 @@ QUESTION_BANK = {
         "Describe a time you designed a metric that turned out to be misleading.",
         "How do you design an A/B test from scratch? Walk me through it.",
         "Tell me about a time the results of an experiment surprised you.",
-        "How do you decide what to measure when the 'right' metric isn't obvious?",
+        "How do you decide what to measure when the right metric is not obvious?",
         "Describe a time you had to make a decision with very little data.",
         "How do you distinguish between correlation and causation in practice?",
         "Tell me about a time a dashboard or report led to a wrong conclusion.",
-        "How do you handle a situation where different teams are using different definitions of the same metric?",
+        "How do you handle a situation where different teams use different definitions of the same metric?",
         "Describe a time you built a data pipeline or reporting system from scratch.",
         "How do you communicate statistical significance to non-technical stakeholders?",
         "Tell me about a time you used qualitative data to complement quantitative analysis.",
@@ -121,86 +121,125 @@ QUESTION_BANK = {
 ALL_CATEGORIES = list(QUESTION_BANK.keys())
 
 def get_all_questions():
-    return [q for questions in QUESTION_BANK.values() for q in questions]
+    return [q for qs in QUESTION_BANK.values() for q in qs]
 
 def get_new_question():
-    cat = st.session_state.selected_category
-    if cat == "All":
-        pool = get_all_questions()
-    else:
-        pool = QUESTION_BANK[cat]
+    """Pick a new question. Never touches timer state."""
+    cat  = st.session_state.selected_category
+    pool = get_all_questions() if cat == "All" else QUESTION_BANK[cat]
     st.session_state.current_question = random.choice(pool)
-    st.session_state.think_start = None
-    st.session_state.think_done = False
-    st.session_state.start_time = None
+
+def reset_timer_only():
+    """Reset timer state only. Current question is intentionally preserved."""
+    st.session_state.think_start    = None
+    st.session_state.think_done     = False
+    st.session_state.start_time     = None
     st.session_state.section_resets = {}
+    st.session_state.paused         = False
+    st.session_state.paused_at      = None
 
 # --- SESSION STATE INIT ---
-if 'selected_category' not in st.session_state:
-    st.session_state.selected_category = "All"
-if 'current_question' not in st.session_state:
-    st.session_state.current_question = random.choice(get_all_questions())
-if 'start_time' not in st.session_state:
-    st.session_state.start_time = None
-if 'history' not in st.session_state:
-    st.session_state.history = []
-if 'think_duration' not in st.session_state:
-    st.session_state.think_duration = 30
-if 'think_start' not in st.session_state:
-    st.session_state.think_start = None
-if 'think_done' not in st.session_state:
-    st.session_state.think_done = False
-if 'section_resets' not in st.session_state:
-    st.session_state.section_resets = {}
+_defaults = {
+    "selected_category": "All",
+    "think_start":       None,
+    "think_done":        False,
+    "think_duration":    30,
+    "start_time":        None,
+    "paused":            False,
+    "paused_at":         None,
+    "section_resets":    {},
+    "history":           [],
+}
+for _k, _v in _defaults.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
 
-# --- 2. BROWSER-BASED VIDEO RECORDER ---
-record_js = """
-<div style="text-align: center; font-family: sans-serif; background: #111; padding: 15px; border-radius: 15px;">
-    <video id="video" width="100%" height="auto" autoplay muted style="border-radius:10px; border: 2px solid #333;"></video><br>
-    <button id="start" style="margin:10px; padding:12px 20px; background:#28a745; color:white; border:none; border-radius:5px; cursor:pointer; font-weight:bold;">⏺ RECORD SESSION</button>
-    <button id="stop" style="margin:10px; padding:12px 20px; background:#dc3545; color:white; border:none; border-radius:5px; cursor:pointer; font-weight:bold;">⏹ STOP & SAVE</button>
+# current_question in its own block so it is never clobbered by defaults loop
+if "current_question" not in st.session_state:
+    st.session_state.current_question = random.choice(get_all_questions())
+
+
+# --- 2. VIDEO RECORDER ---
+def make_recorder_html(autostart: bool) -> str:
+    flag = "true" if autostart else "false"
+    hint = "Recording will start automatically..." if autostart else "Press RECORD to begin."
+    return f"""
+<div style="text-align:center;font-family:sans-serif;background:#111;
+            padding:15px;border-radius:15px;">
+  <video id="vid" width="100%" autoplay muted
+         style="border-radius:10px;border:2px solid #333;"></video>
+  <div id="hint" style="color:#aaa;font-size:12px;margin:6px 0;">{hint}</div>
+  <button id="recBtn"
+    style="margin:6px;padding:10px 18px;background:#28a745;color:#fff;
+           border:none;border-radius:5px;cursor:pointer;font-weight:bold;">
+    RECORD
+  </button>
+  <button id="stopBtn"
+    style="margin:6px;padding:10px 18px;background:#dc3545;color:#fff;
+           border:none;border-radius:5px;cursor:pointer;font-weight:bold;">
+    STOP & SAVE
+  </button>
 </div>
 <script>
-    let b = document.getElementById("start");
-    let s = document.getElementById("stop");
-    let v = document.getElementById("video");
-    let mediaRecorder;
-    let chunks = [];
+(function(){{
+  var autostart = {flag};
+  var recBtn  = document.getElementById('recBtn');
+  var stopBtn = document.getElementById('stopBtn');
+  var vid     = document.getElementById('vid');
+  var hint    = document.getElementById('hint');
+  var mr, chunks=[], stream;
 
-    async function startRec() {
-        const stream = await navigator.mediaDevices.getUserMedia({video: true, audio: true});
-        v.srcObject = stream;
-        mediaRecorder = new MediaRecorder(stream);
-        mediaRecorder.ondataavailable = e => chunks.push(e.data);
-        mediaRecorder.onstop = e => {
-            const blob = new Blob(chunks, {type: "video/webm"});
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = "speech_practice.webm";
-            a.click();
-            chunks = [];
-        };
-        mediaRecorder.start();
-    }
-    b.onclick = () => { startRec(); b.disabled = true; };
-    s.onclick = () => { mediaRecorder.stop(); v.srcObject.getTracks().forEach(t => t.stop()); b.disabled = false; };
+  async function startRec(){{
+    try{{
+      stream = await navigator.mediaDevices.getUserMedia({{video:true,audio:true}});
+      vid.srcObject = stream;
+      mr = new MediaRecorder(stream);
+      mr.ondataavailable = function(e){{ chunks.push(e.data); }};
+      mr.onstop = function(){{
+        var blob = new Blob(chunks,{{type:'video/webm'}});
+        var url  = URL.createObjectURL(blob);
+        var a    = document.createElement('a');
+        a.href=url; a.download='speech_practice.webm'; a.click();
+        chunks=[];
+      }};
+      mr.start();
+      recBtn.disabled=true;
+      hint.textContent='Recording...';
+      hint.style.color='#ff4444';
+    }}catch(e){{
+      hint.textContent='Camera/mic access denied.';
+    }}
+  }}
+
+  recBtn.onclick  = startRec;
+  stopBtn.onclick = function(){{
+    if(mr && mr.state!=='inactive'){{
+      mr.stop();
+      if(stream) stream.getTracks().forEach(function(t){{t.stop();}});
+      recBtn.disabled=false;
+      hint.textContent='Saved to your device.';
+      hint.style.color='#44ff88';
+    }}
+  }};
+
+  if(autostart){{ setTimeout(startRec, 500); }}
+}})();
 </script>
 """
 
+
 # --- 3. MAIN INTERFACE ---
-st.title("🎤 Psyc-Check: Speaking Mastery")
+st.title("Psyc-Check: Speaking Mastery")
 st.write("Master your pacing, track your framework, and stay on point.")
 
 col_left, col_right = st.columns([1, 2])
 
 with col_left:
     # Category filter
-    category_options = ["All"] + ALL_CATEGORIES
+    cat_options = ["All"] + ALL_CATEGORIES
     selected = st.selectbox(
-        "Question category",
-        category_options,
-        index=category_options.index(st.session_state.selected_category),
+        "Question category", cat_options,
+        index=cat_options.index(st.session_state.selected_category),
         key="category_select"
     )
     if selected != st.session_state.selected_category:
@@ -210,267 +249,238 @@ with col_left:
 
     st.info(f"**YOUR QUESTION:** {st.session_state.current_question}")
 
-    if st.button("Next Question ↻"):
+    if st.button("Next Question"):
         get_new_question()
         st.rerun()
 
-    # Think timer controls
-    st.subheader("⏳ Think Time")
-    think_options = {"15 seconds": 15, "30 seconds": 30, "60 seconds": 60}
-    chosen_label = st.selectbox(
-        "How long to think?",
-        list(think_options.keys()),
-        index=1
-    )
-    st.session_state.think_duration = think_options[chosen_label]
+    # Think timer
+    st.subheader("Think Time")
+    think_map = {"15 seconds": 15, "30 seconds": 30, "60 seconds": 60}
+    chosen = st.selectbox("How long to think?", list(think_map.keys()), index=1)
+    st.session_state.think_duration = think_map[chosen]
 
-    col_think1, col_think2 = st.columns(2)
-    with col_think1:
-        if st.button("⏱ Start Think Timer", use_container_width=True):
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Start Think Timer", use_container_width=True):
             st.session_state.think_start = time.time()
-            st.session_state.think_done = False
+            st.session_state.think_done  = False
             st.rerun()
-    with col_think2:
-        if st.button("Skip → Start Now", use_container_width=True):
-            st.session_state.think_done = True
-            st.session_state.start_time = time.time()
+    with c2:
+        if st.button("Skip, Start Now", use_container_width=True):
+            st.session_state.think_done     = True
+            st.session_state.start_time     = time.time()
             st.session_state.section_resets = {}
+            st.session_state.paused         = False
+            st.session_state.paused_at      = None
             st.rerun()
 
     # Think timer countdown
     if st.session_state.think_start and not st.session_state.think_done:
-        elapsed_think = time.time() - st.session_state.think_start
-        remaining_think = st.session_state.think_duration - elapsed_think
-        if remaining_think > 0:
-            st.markdown(f"### Think: `{remaining_think:.1f}s`")
-            st.progress(min(elapsed_think / st.session_state.think_duration, 1.0))
+        et = time.time() - st.session_state.think_start
+        rt = st.session_state.think_duration - et
+        if rt > 0:
+            st.markdown(f"### Think: `{rt:.1f}s`")
+            st.progress(min(et / st.session_state.think_duration, 1.0))
             time.sleep(0.1)
             st.rerun()
         else:
-            st.session_state.think_done = True
-            st.session_state.start_time = time.time()
+            st.session_state.think_done     = True
+            st.session_state.start_time     = time.time()
             st.session_state.section_resets = {}
-            st.success("✅ Think time done — begin speaking!")
+            st.session_state.paused         = False
+            st.session_state.paused_at      = None
+            st.success("Think time done. Begin speaking!")
             time.sleep(0.1)
             st.rerun()
 
-    st.subheader("🎥 Video Practice")
-    html(record_js, height=400)
-    st.caption("Video saves directly to your device to ensure privacy and zero lag.")
+    # Video — auto-starts once speaking timer is live and not paused
+    autostart_rec = (
+        st.session_state.think_done and
+        st.session_state.start_time is not None and
+        not st.session_state.paused
+    )
+    st.subheader("Video Practice")
+    html(make_recorder_html(autostart=autostart_rec), height=430)
+    st.caption("Video saves directly to your device — nothing is uploaded.")
 
 with col_right:
-    st.subheader("⏱️ Live Framework Tracker")
+    st.subheader("Live Framework Tracker")
 
-    if not st.session_state.get('think_done') and not st.session_state.get('start_time'):
-        st.info("Use the Think Timer on the left to begin, or click 'Skip → Start Now'.")
+    if not st.session_state.start_time and not st.session_state.think_start:
+        st.info("Start the Think Timer or click 'Skip, Start Now' to begin.")
 
     if st.session_state.start_time:
-        elapsed = time.time() - st.session_state.start_time
-        cum_time = 0
+        # Elapsed: frozen when paused
+        if st.session_state.paused:
+            elapsed = st.session_state.paused_at
+        else:
+            elapsed = time.time() - st.session_state.start_time
+
+        # Control buttons
+        bc1, bc2 = st.columns(2)
+        with bc1:
+            if st.session_state.paused:
+                if st.button("Resume", use_container_width=True):
+                    st.session_state.start_time = time.time() - st.session_state.paused_at
+                    st.session_state.paused     = False
+                    st.session_state.paused_at  = None
+                    st.rerun()
+            else:
+                if st.button("Pause", use_container_width=True):
+                    st.session_state.paused_at = time.time() - st.session_state.start_time
+                    st.session_state.paused    = True
+                    st.rerun()
+        with bc2:
+            if st.button("Reset Timer", use_container_width=True):
+                reset_timer_only()   # question is NOT changed
+                st.rerun()
+
+        if st.session_state.paused:
+            st.warning("Paused. Press Resume to continue.")
+
+        # Section-by-section display
+        cum_time      = 0
         still_running = False
 
         for idx, (name, duration) in enumerate(SPEECH_STRUCTURE):
-            section_key = f"reset_{idx}"
-            reset_offset = st.session_state.section_resets.get(section_key, 0)
-            section_start = cum_time
-            section_end = cum_time + duration
-            adjusted_elapsed = elapsed - reset_offset
+            section_key   = f"reset_{idx}"
+            reset_offset  = st.session_state.section_resets.get(section_key, 0)
+            adjusted      = elapsed - reset_offset
 
-            if adjusted_elapsed < section_start:
-                st.markdown(f"⚪ **{name}** — {duration}s")
-            elif adjusted_elapsed <= section_end:
-                still_running = True
-                section_elapsed = adjusted_elapsed - section_start
-                remaining = duration - section_elapsed
-                st.markdown(f"### 🔥 {name.upper()}")
-                col_a, col_b = st.columns([3, 1])
-                with col_a:
-                    st.progress(min(section_elapsed / duration, 1.0))
+            if adjusted < cum_time:
+                st.markdown(f"- {name} ({duration}s)")
+            elif adjusted <= cum_time + duration:
+                if not st.session_state.paused:
+                    still_running = True
+                sec_elapsed = adjusted - cum_time
+                remaining   = duration - sec_elapsed
+                st.markdown(f"### {name.upper()}")
+                ca, cb = st.columns([3, 1])
+                with ca:
+                    st.progress(min(sec_elapsed / duration, 1.0))
                     if remaining <= 5:
-                        st.error(f"⚠️ Wrap up! `{remaining:.1f}s` left")
+                        st.error(f"Wrap up! {remaining:.1f}s left")
                     else:
                         st.markdown(f"`{remaining:.1f}s` remaining")
-                with col_b:
-                    if st.button("↺ Redo", key=f"redo_{idx}"):
+                with cb:
+                    if st.button("Redo", key=f"redo_{idx}"):
                         st.session_state.section_resets[section_key] = (
-                            st.session_state.section_resets.get(section_key, 0) + section_elapsed
+                            st.session_state.section_resets.get(section_key, 0) + sec_elapsed
                         )
                         st.rerun()
             else:
-                st.markdown(f"✅ **{name}** — done")
+                st.markdown(f"- ~~{name}~~ done")
 
             cum_time += duration
 
+        total_with_redos = TOTAL_TIME + sum(st.session_state.section_resets.values())
         if still_running:
             time.sleep(0.1)
             st.rerun()
-        elif elapsed > TOTAL_TIME + sum(st.session_state.section_resets.values()):
-            st.success("🎯 All sections complete!")
-            if st.button("Reset Timer"):
-                st.session_state.start_time = None
-                st.session_state.think_start = None
-                st.session_state.think_done = False
-                st.session_state.section_resets = {}
-                st.rerun()
+        elif elapsed >= total_with_redos:
+            st.success("All sections complete!")
+
 
 # --- 4. POST-SESSION ANALYSIS ---
 st.divider()
-st.subheader("📝 Post-Session Analysis")
-st.caption("Paste your transcript to get a full evaluation.")
+st.subheader("Post-Session Analysis")
+st.caption("Paste your transcript for a full evaluation.")
 
-user_text = st.text_area("Paste your transcript here:", height=150)
+user_text = st.text_area("Paste transcript here:", height=150)
 
 def analyze_transcript(text):
-    words = text.lower().split()
-    word_count = len(words)
+    wc = len(text.lower().split())
 
-    # 1. STAR Coverage
-    star_keywords = {
+    star_kw = {
         "Situation": ["situation", "context", "background", "when", "working at", "was at"],
-        "Task": ["task", "responsibility", "goal", "objective", "needed to", "had to", "my role"],
-        "Action": ["action", "i did", "i built", "i created", "i led", "i implemented",
-                   "i decided", "i proposed", "i reached out", "i worked", "i ran", "i designed"],
-        "Result": ["result", "outcome", "impact", "achieved", "increased", "decreased",
-                   "reduced", "saved", "improved", "delivered", "shipped", "led to"],
+        "Task":      ["task", "responsibility", "goal", "objective", "needed to", "had to", "my role"],
+        "Action":    ["action", "i did", "i built", "i created", "i led", "i implemented",
+                      "i decided", "i proposed", "i reached out", "i worked", "i ran", "i designed"],
+        "Result":    ["result", "outcome", "impact", "achieved", "increased", "decreased",
+                      "reduced", "saved", "improved", "delivered", "shipped", "led to"],
     }
-    star_found = {}
-    for component, kws in star_keywords.items():
-        star_found[component] = any(kw in text.lower() for kw in kws)
+    star_found = {c: any(kw in text.lower() for kw in kws) for c, kws in star_kw.items()}
     star_score = int((sum(star_found.values()) / 4) * 100)
 
-    # 2. Filler Words
-    fillers = ["um", "uh", "like", "you know", "basically", "literally",
-               "right?", "so yeah", "i mean", "sort of", "kind of"]
+    fillers      = ["um", "uh", "like", "you know", "basically", "literally",
+                    "right?", "so yeah", "i mean", "sort of", "kind of"]
     filler_count = sum(text.lower().count(f) for f in fillers)
-    if filler_count <= 3:
-        filler_rating = "Low"
-    elif filler_count <= 8:
-        filler_rating = "Medium"
-    else:
-        filler_rating = "High"
+    filler_rating = "Low" if filler_count <= 3 else "Medium" if filler_count <= 8 else "High"
 
-    # 3. Answer Length
-    if word_count < 80:
-        length_rating = "Too Short"
-    elif word_count <= 350:
-        length_rating = "Ideal"
-    else:
-        length_rating = "Too Long"
+    length_rating = "Too Short" if wc < 80 else "Ideal" if wc <= 350 else "Too Long"
 
-    # 4. Confidence Markers (hedging language)
-    hedges = ["i think maybe", "sort of", "kind of", "i'm not sure but",
-              "i guess", "probably", "might have", "not really sure",
-              "i hope", "i feel like maybe"]
+    hedges      = ["i think maybe", "sort of", "kind of", "i'm not sure but",
+                   "i guess", "probably", "might have", "not really sure",
+                   "i hope", "i feel like maybe"]
     hedge_count = sum(text.lower().count(h) for h in hedges)
-    if hedge_count == 0:
-        hedge_flag = "None detected — strong"
-    elif hedge_count <= 2:
-        hedge_flag = f"{hedge_count} found — acceptable"
-    else:
-        hedge_flag = f"{hedge_count} found — reduce hedging"
+    hedge_flag  = ("None detected" if hedge_count == 0
+                   else f"{hedge_count} found - acceptable" if hedge_count <= 2
+                   else f"{hedge_count} found - reduce hedging")
 
-    # Overall score
-    score_points = (
+    pts = (
         (star_score / 100) * 40 +
         (1 if filler_rating == "Low" else 0.5 if filler_rating == "Medium" else 0) * 20 +
         (1 if length_rating == "Ideal" else 0.5) * 20 +
         (1 if hedge_count == 0 else 0.5 if hedge_count <= 2 else 0) * 20
     )
-    if score_points >= 75:
-        overall = "Strong"
-    elif score_points >= 50:
-        overall = "Good"
-    else:
-        overall = "Needs Work"
+    overall = "Strong" if pts >= 75 else "Good" if pts >= 50 else "Needs Work"
 
-    return {
-        "star_score": star_score,
-        "star_found": star_found,
-        "filler_count": filler_count,
-        "filler_rating": filler_rating,
-        "word_count": word_count,
-        "length_rating": length_rating,
-        "hedge_count": hedge_count,
-        "hedge_flag": hedge_flag,
-        "overall": overall,
-        "score_points": round(score_points),
-    }
+    return dict(star_score=star_score, star_found=star_found,
+                filler_count=filler_count, filler_rating=filler_rating,
+                word_count=wc, length_rating=length_rating,
+                hedge_count=hedge_count, hedge_flag=hedge_flag,
+                overall=overall, score_points=round(pts))
 
 results = None
 if user_text:
     results = analyze_transcript(user_text)
-
     st.markdown("### Scorecard")
     r1c1, r1c2 = st.columns(2)
     r2c1, r2c2 = st.columns(2)
 
     with r1c1:
         st.metric("STAR Coverage", f"{results['star_score']}%")
-        found_labels = [k for k, v in results['star_found'].items() if v]
-        missing_labels = [k for k, v in results['star_found'].items() if not v]
-        if found_labels:
-            st.caption(f"Found: {', '.join(found_labels)}")
-        if missing_labels:
-            st.warning(f"Missing: {', '.join(missing_labels)}")
+        found   = [k for k, v in results['star_found'].items() if v]
+        missing = [k for k, v in results['star_found'].items() if not v]
+        if found:   st.caption(f"Found: {', '.join(found)}")
+        if missing: st.warning(f"Missing: {', '.join(missing)}")
 
     with r1c2:
-        st.metric("Filler Words", results['filler_count'], help="um, uh, like, you know...")
-        rating_map = {"Low": "success", "Medium": "warning", "High": "error"}
-        getattr(st, rating_map[results['filler_rating']])(f"Rating: {results['filler_rating']}")
+        st.metric("Filler Words", results['filler_count'])
+        {"Low": st.success, "Medium": st.warning, "High": st.error}[results['filler_rating']](
+            f"Rating: {results['filler_rating']}")
 
     with r2c1:
         st.metric("Answer Length", f"{results['word_count']} words")
-        if results['length_rating'] == "Ideal":
-            st.success("Length: Ideal")
-        elif results['length_rating'] == "Too Short":
-            st.warning("Too Short — aim for 150–300 words")
-        else:
-            st.warning("Too Long — tighten your answer")
+        if   results['length_rating'] == "Ideal":     st.success("Ideal length")
+        elif results['length_rating'] == "Too Short": st.warning("Too short — aim for 150-300 words")
+        else:                                         st.warning("Too long — tighten your answer")
 
     with r2c2:
-        st.metric("Confidence Markers", results['hedge_count'], help="hedging phrases detected")
-        if results['hedge_count'] == 0:
-            st.success(results['hedge_flag'])
-        elif results['hedge_count'] <= 2:
-            st.warning(results['hedge_flag'])
-        else:
-            st.error(results['hedge_flag'])
+        st.metric("Confidence Markers", results['hedge_count'])
+        if   results['hedge_count'] == 0:  st.success(results['hedge_flag'])
+        elif results['hedge_count'] <= 2:  st.warning(results['hedge_flag'])
+        else:                              st.error(results['hedge_flag'])
 
     st.markdown("---")
-    overall_colors = {"Strong": "success", "Good": "warning", "Needs Work": "error"}
-    getattr(st, overall_colors[results['overall']])(
-        f"**Overall: {results['overall']}** — score {results['score_points']}/100"
-    )
+    {"Strong": st.success, "Good": st.warning, "Needs Work": st.error}[results['overall']](
+        f"**Overall: {results['overall']}** — {results['score_points']}/100")
 
-if st.button("💾 Log This Session"):
-    if results:
-        st.session_state.history.append({
-            "Session": len(st.session_state.history) + 1,
-            "STAR Score": results['star_score'],
-            "Filler Words": results['filler_count'],
-            "Word Count": results['word_count'],
-            "Hedge Count": results['hedge_count'],
-            "Overall": results['overall'],
-        })
-    else:
-        st.session_state.history.append({
-            "Session": len(st.session_state.history) + 1,
-            "STAR Score": 0,
-            "Filler Words": 0,
-            "Word Count": 0,
-            "Hedge Count": 0,
-            "Overall": "—",
-        })
+if st.button("Log This Session"):
+    st.session_state.history.append({
+        "Session":      len(st.session_state.history) + 1,
+        "STAR Score":   results['star_score']   if results else 0,
+        "Filler Words": results['filler_count'] if results else 0,
+        "Word Count":   results['word_count']   if results else 0,
+        "Hedge Count":  results['hedge_count']  if results else 0,
+        "Overall":      results['overall']      if results else "--",
+    })
     st.toast("Session Saved!")
 
 if st.session_state.history:
     df = pd.DataFrame(st.session_state.history)
     st.plotly_chart(
-        px.line(
-            df, x="Session",
-            y=["STAR Score", "Filler Words", "Word Count"],
-            markers=True,
-            title="Your Progress Over Time"
-        ),
+        px.line(df, x="Session", y=["STAR Score", "Filler Words", "Word Count"],
+                markers=True, title="Your Progress Over Time"),
         use_container_width=True
     )
